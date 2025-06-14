@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  scraper-service:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override specific values for development
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - RELOAD=true
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    volumes:
+      - ./src:/app/src
+    networks:
+      - scraper-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - scraper-network
+    restart: unless-stopped
+
+  # Optional monitoring services
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - scraper-network
+    restart: unless-stopped
+    profiles:
+      - monitoring  # This makes it optional
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - scraper-network
+    restart: unless-stopped
+    profiles:
+      - monitoring  # This makes it optional
+
+volumes:
+  redis_data:
+  grafana_data:
+
+networks:
+  scraper-network:
+    driver: bridge

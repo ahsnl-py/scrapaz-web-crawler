@@ -1,3 +1,13 @@
+# Environment files
 .env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# But allow example files
+!.env.example
+
+dev
 *.csv
 __pycache__
