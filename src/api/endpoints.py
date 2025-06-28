@@ -69,10 +69,8 @@ async def create_scraping_job(
     try:
         # Create scraping job
         job = ScrapingJob(
-            url=str(job_request.url),
-            css_selector=job_request.css_selector,
+            job_type=job_request.job_type,
             ai_model_provider=job_request.ai_model_provider,
-            data_schema=job_request.data_schema,
             storage_type=job_request.storage_type,
             session_id=job_request.session_id,
             metadata=job_request.metadata,
@@ -99,8 +97,7 @@ async def create_scraping_job(
         
         return ScrapingJobResponse(
             id=str(job.id),
-            url=job.url,
-            css_selector=job.css_selector,
+            job_type=job.job_type,
             ai_model_provider=job.ai_model_provider,
             status=job.status,
             created_at=job.created_at,
@@ -152,8 +149,7 @@ async def list_jobs(
         job_responses = [
             ScrapingJobResponse(
                 id=str(job.id),
-                url=job.url,
-                css_selector=job.css_selector,
+                job_type=job.job_type,
                 ai_model_provider=job.ai_model_provider,
                 status=job.status,
                 created_at=job.created_at,
@@ -204,8 +200,7 @@ async def get_job(
         job = jobs_storage[job_id]
         return ScrapingJobResponse(
             id=str(job.id),
-            url=job.url,
-            css_selector=job.css_selector,
+            job_type=job.job_type,
             ai_model_provider=job.ai_model_provider,
             status=job.status,
             created_at=job.created_at,
@@ -502,6 +497,31 @@ async def get_statistics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get statistics: {str(e)}"
+        )
+
+
+@router.get("/job-types", response_model=List[str])
+async def get_supported_job_types(
+    scraping_service=Depends(get_scraping_service),
+    _: bool = Depends(validate_api_key),
+):
+    """
+    Get list of supported job types.
+    
+    Args:
+        scraping_service: The scraping service
+        
+    Returns:
+        List[str]: List of supported job types
+    """
+    try:
+        job_types = await scraping_service.get_supported_job_types()
+        return job_types
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get job types: {str(e)}"
         )
 
 

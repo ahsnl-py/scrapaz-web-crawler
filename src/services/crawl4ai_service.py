@@ -12,18 +12,23 @@ from crawl4ai import (
     AsyncWebCrawler,
     BrowserConfig,
     CacheMode,
+    CrawlResult,
     CrawlerRunConfig,
+    JsonCssExtractionStrategy,
     LLMExtractionStrategy,
+    LLMConfig,
 )
 
 from ..core.models import (
     AIModelProvider,
+    JobType,
     ScrapingJob,
     ScrapingResult,
     ScrapingServiceConfig,
     ScrapingStatus,
 )
 from ..core.scraping_service import ScrapingService
+from .job_config_service import JobConfigService
 
 
 class Crawl4AIService(ScrapingService):
@@ -34,6 +39,7 @@ class Crawl4AIService(ScrapingService):
     
     def __init__(self):
         self.active_jobs: Dict[str, asyncio.Task] = {}
+        self.job_config_service = JobConfigService()
         self._supported_providers = [
             AIModelProvider.GROQ,
             AIModelProvider.OPENAI,
@@ -62,6 +68,13 @@ class Crawl4AIService(ScrapingService):
         job.started_at = time.time()
         
         try:
+            # Get job configuration
+            job_config = self.job_config_service.get_job_config(job.job_type)
+            
+            # Get or generate schema
+            schema = await self._get_or_generate_schema(job.job_type, job_config)
+            job.data_schema = schema
+            
             # Validate the job
             if not await self.validate_job(job):
                 raise ValueError("Invalid scraping job")
@@ -69,12 +82,9 @@ class Crawl4AIService(ScrapingService):
             # Create browser configuration
             browser_config = self._create_browser_config(config)
             
-            # Create LLM strategy
-            llm_strategy = self._create_llm_strategy(job)
-            
-            # Execute the scraping
-            result_data = await self._execute_scraping(
-                job, browser_config, llm_strategy, config
+            # Execute the scraping using JsonCssExtractionStrategy
+            result_data = await self._execute_scraping_with_schema(
+                job, browser_config, schema, job_config, config
             )
             
             # Calculate extraction time
@@ -89,7 +99,7 @@ class Crawl4AIService(ScrapingService):
                 data=result_data,
                 total_items=len(result_data),
                 extraction_time=extraction_time,
-                metadata={"provider": job.ai_model_provider.value}
+                metadata={"provider": job.ai_model_provider.value, "job_type": job.job_type.value}
             )
             
         except Exception as e:
@@ -99,6 +109,103 @@ class Crawl4AIService(ScrapingService):
             job.completed_at = time.time()
             
             raise
+    
+    async def _get_or_generate_schema(self, job_type: JobType, job_config: Dict) -> Dict:
+        """Get cached schema or generate new one"""
+        schema_key = job_config["cached_schema_key"]
+        
+        # Try to get cached schema first
+        cached_schema = self.job_config_service.get_cached_schema(schema_key)
+        if cached_schema:
+            return cached_schema
+        
+        # Generate new schema
+        schema = await self._generate_schema(job_config)
+        
+        # Cache the schema
+        self.job_config_service.cache_schema(schema_key, schema)
+        
+        return schema
+    
+    async def _generate_schema(self, job_config: Dict) -> Dict:
+        """Generate schema using LLM"""
+        # First, we need to get sample HTML content
+        sample_html = await self._get_sample_html(job_config["url"])
+        
+        llm_config = LLMConfig(
+            provider=job_config["provider"],
+            api_token=self._get_api_key(AIModelProvider.GROQ),  # Default to GROQ
+        )
+        
+        schema = JsonCssExtractionStrategy.generate_schema(
+            html=sample_html,
+            llm_config=llm_config,
+            query=job_config["schema_query"],
+        )
+        
+        return schema
+    
+    async def _get_sample_html(self, url: str) -> str:
+        """Get sample HTML content for schema generation"""
+        browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
+            verbose=False,
+        )
+        
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(
+                url=url,
+                config=CrawlerRunConfig(
+                    cache_mode=CacheMode.BYPASS,
+                )
+            )
+            
+            if result.success:
+                return result.html
+            else:
+                raise ValueError(f"Failed to get sample HTML from {url}")
+    
+    async def _execute_scraping_with_schema(
+        self,
+        job: ScrapingJob,
+        browser_config: BrowserConfig,
+        schema: Dict,
+        job_config: Dict,
+        config: ScrapingServiceConfig,
+    ) -> List[Dict]:
+        """Execute scraping using JsonCssExtractionStrategy"""
+        session_id = job.session_id or f"session_{job.id}"
+        
+        # Create extraction strategy
+        extraction_strategy = JsonCssExtractionStrategy(schema=schema)
+        
+        # Create run config
+        run_config = CrawlerRunConfig(
+            # cache_mode=CacheMode.BYPASS,
+            extraction_strategy=extraction_strategy,
+            session_id=session_id,
+        )
+        
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result: List[CrawlResult] = await crawler.arun(
+                url=job_config["url"],  # Use URL from config
+                config=run_config
+            )
+            
+            all_data = []
+            for r in result:
+                if r.success and r.extracted_content:
+                    try:
+                        extracted_data = json.loads(r.extracted_content)
+                        if isinstance(extracted_data, list):
+                            all_data.extend(extracted_data)
+                        else:
+                            all_data.append(extracted_data)
+                    except json.JSONDecodeError:
+                        continue
+            
+            return all_data
     
     async def validate_job(self, job: ScrapingJob) -> bool:
         """
@@ -110,23 +217,25 @@ class Crawl4AIService(ScrapingService):
         Returns:
             bool: True if the job is valid, False otherwise
         """
-        # Check if URL is provided
-        if not job.url or not job.url.strip():
+        # Check if job type is provided
+        if not job.job_type:
             return False
         
-        # Check if data schema is provided
-        if not job.data_schema:
+        # Check if job type is supported
+        try:
+            self.job_config_service.get_job_config(job.job_type)
+        except ValueError:
             return False
         
-        # Check if AI model provider is supported
-        if job.ai_model_provider not in self._supported_providers:
-            return False
-        
-        # Check if API key is available for the provider
-        if not self._get_api_key(job.ai_model_provider):
+        # Check if API key is available for schema generation
+        if not self._get_api_key(AIModelProvider.GROQ):
             return False
         
         return True
+    
+    async def get_supported_job_types(self) -> List[str]:
+        """Get list of supported job types"""
+        return self.job_config_service.get_all_job_types()
     
     async def get_supported_providers(self) -> List[AIModelProvider]:
         """
@@ -177,166 +286,6 @@ class Crawl4AIService(ScrapingService):
             headless=config.headless,
             verbose=config.verbose,
         )
-    
-    def _create_llm_strategy(self, job: ScrapingJob) -> LLMExtractionStrategy:
-        """Create LLM extraction strategy for Crawl4AI"""
-        api_key = self._get_api_key(job.ai_model_provider)
-        provider_name = self._get_provider_name(job.ai_model_provider)
-        
-        return LLMExtractionStrategy(
-            provider=provider_name,
-            api_token=api_key,
-            schema=job.data_schema,
-            extraction_type="schema",
-            instruction=self._get_extraction_instruction(job),
-            input_format="markdown",
-            verbose=True,
-        )
-    
-    async def _execute_scraping(
-        self,
-        job: ScrapingJob,
-        browser_config: BrowserConfig,
-        llm_strategy: LLMExtractionStrategy,
-        config: ScrapingServiceConfig,
-    ) -> List[Dict]:
-        """Execute the actual scraping operation"""
-        session_id = job.session_id or f"session_{job.id}"
-        seen_items = set()
-        all_data = []
-        page_number = 1
-        
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            while True:
-                # Check for rate limiting
-                if config.rate_limit_delay > 0:
-                    await asyncio.sleep(config.rate_limit_delay)
-                
-                # Fetch and process page
-                page_data, no_more_results = await self._fetch_and_process_page(
-                    crawler=crawler,
-                    job=job,
-                    page_number=page_number,
-                    llm_strategy=llm_strategy,
-                    session_id=session_id,
-                    seen_items=seen_items,
-                    config=config,
-                )
-                
-                if no_more_results or not page_data:
-                    break
-                
-                all_data.extend(page_data)
-                page_number += 1
-        
-        return all_data
-    
-    async def _fetch_and_process_page(
-        self,
-        crawler: AsyncWebCrawler,
-        job: ScrapingJob,
-        page_number: int,
-        llm_strategy: LLMExtractionStrategy,
-        session_id: str,
-        seen_items: Set[str],
-        config: ScrapingServiceConfig,
-    ) -> tuple[List[Dict], bool]:
-        """Fetch and process a single page"""
-        # Construct URL with pagination if needed
-        url = self._construct_page_url(job.url, page_number)
-        
-        # Check for "No Results Found" message
-        no_results = await self._check_no_results(crawler, url, session_id)
-        if no_results:
-            return [], True
-        
-        # Fetch page content
-        result = await crawler.arun(
-            url=url,
-            config=CrawlerRunConfig(
-                cache_mode=CacheMode.BYPASS,
-                extraction_strategy=llm_strategy,
-                css_selector=job.css_selector,
-                session_id=session_id,
-            ),
-        )
-        
-        if not (result.success and result.extracted_content):
-            return [], False
-        
-        # Parse and process extracted content
-        extracted_data = json.loads(result.extracted_content)
-        if not extracted_data:
-            return [], False
-        
-        # Process and deduplicate data
-        processed_data = []
-        for item in extracted_data:
-            if self._is_valid_item(item, job.data_schema):
-                item_id = self._get_item_id(item)
-                if item_id not in seen_items:
-                    seen_items.add(item_id)
-                    processed_data.append(item)
-        
-        return processed_data, False
-    
-    async def _check_no_results(
-        self, 
-        crawler: AsyncWebCrawler, 
-        url: str, 
-        session_id: str
-    ) -> bool:
-        """Check if the page shows no results"""
-        result = await crawler.arun(
-            url=url,
-            config=CrawlerRunConfig(
-                cache_mode=CacheMode.BYPASS,
-                session_id=session_id,
-            ),
-        )
-        
-        if result.success:
-            no_results_indicators = [
-                "No Results Found",
-                "No results found",
-                "No items found",
-                "No data available",
-            ]
-            return any(indicator in result.cleaned_html for indicator in no_results_indicators)
-        
-        return False
-    
-    def _construct_page_url(self, base_url: str, page_number: int) -> str:
-        """Construct URL for a specific page"""
-        if page_number == 1:
-            return base_url
-        
-        # Handle different pagination patterns
-        if "?" in base_url:
-            return f"{base_url}&page={page_number}"
-        else:
-            return f"{base_url}?page={page_number}"
-    
-    def _is_valid_item(self, item: Dict, schema: Dict) -> bool:
-        """Check if an item is valid according to the schema"""
-        # Remove error keys if they're False
-        if item.get("error") is False:
-            item.pop("error", None)
-        
-        # Check if all required fields are present
-        required_fields = schema.get("required", [])
-        return all(field in item for field in required_fields)
-    
-    def _get_item_id(self, item: Dict) -> str:
-        """Get a unique identifier for an item"""
-        # Use name field if available, otherwise use a combination of fields
-        if "name" in item:
-            return item["name"]
-        elif "id" in item:
-            return str(item["id"])
-        else:
-            # Create a hash from the item content
-            return str(hash(str(item)))
     
     def _get_api_key(self, provider: AIModelProvider) -> Optional[str]:
         """Get API key for the specified provider"""

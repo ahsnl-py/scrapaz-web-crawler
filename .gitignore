@@ -11,3 +11,9 @@
 dev
 *.csv
 __pycache__
+*.pemq
+ec2-scraper-service.pem
+src/.DS_Store
+.DS_Store
+
+notebook

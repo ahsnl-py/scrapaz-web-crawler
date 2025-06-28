@@ -34,13 +34,19 @@ class AIModelProvider(str, Enum):
     GOOGLE = "google"
 
 
+class JobType(str, Enum):
+    """Supported job types"""
+    REAL_ESTATE = "real_estate"
+    JOBS = "jobs"
+    NEWS = "news"
+
+
 class ScrapingJob(BaseModel):
     """Represents a scraping job"""
     id: UUID = Field(default_factory=uuid4)
-    url: str
-    css_selector: Optional[str] = None
+    job_type: JobType
     ai_model_provider: AIModelProvider = AIModelProvider.GROQ
-    data_schema: Dict[str, Any]
+    data_schema: Optional[Dict[str, Any]] = None
     status: ScrapingStatus = ScrapingStatus.PENDING
     created_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None

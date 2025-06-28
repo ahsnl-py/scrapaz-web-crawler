@@ -1,0 +1,27 @@
+{
+  "name": "Apartment Listings",
+  "baseSelector": ".list > div",
+  "fields": [
+      {
+          "name": "name",
+          "selector": "h3",
+          "type": "text"
+      },
+      {
+          "name": "location",
+          "selector": "h2",
+          "type": "text"
+      },
+      {
+          "name": "link",
+          "selector": "h2 a",
+          "type": "attribute",
+          "attribute": "href"
+      },
+      {
+          "name": "price",
+          "selector": "strong",
+          "type": "text"
+      }
+  ]
+}

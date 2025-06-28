@@ -5,18 +5,16 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from ..core.models import AIModelProvider, StorageType
+from ..core.models import AIModelProvider, JobType, StorageType
 
 
 class ScrapingJobRequest(BaseModel):
     """Request schema for creating a new scraping job"""
-    url: HttpUrl = Field(..., description="URL to scrape")
-    css_selector: Optional[str] = Field(None, description="CSS selector to target specific content")
+    job_type: JobType = Field(..., description="Type of job to execute")
     ai_model_provider: AIModelProvider = Field(
         default=AIModelProvider.GROQ,
         description="AI model provider to use for extraction"
     )
-    data_schema: Dict[str, Any] = Field(..., description="JSON schema for data extraction")
     storage_type: StorageType = Field(
         default=StorageType.MEMORY,
         description="Storage type for the results"
@@ -39,29 +37,21 @@ class ScrapingConfigRequest(BaseModel):
     timeout: int = Field(default=30, description="Request timeout in seconds")
 
 
-class StorageConfigRequest(BaseModel):
-    """Request schema for storage configuration"""
-    storage_type: StorageType = Field(..., description="Type of storage to use")
-    expiration: Optional[int] = Field(None, description="Expiration time in seconds (for Redis)")
-    bucket_name: Optional[str] = Field(None, description="S3 bucket name")
-    metadata: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Additional storage metadata"
+class HealthCheckRequest(BaseModel):
+    """Request schema for health check"""
+    include_dependencies: bool = Field(
+        default=False, 
+        description="Include dependency health checks"
     )
 
 
 class JobUpdateRequest(BaseModel):
     """Request schema for updating a job"""
-    status: Optional[str] = Field(None, description="New status for the job")
-    metadata: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Additional metadata to update"
-    )
+    status: Optional[str] = Field(None, description="New job status")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
 
 
-class HealthCheckRequest(BaseModel):
-    """Request schema for health check"""
-    include_dependencies: bool = Field(
-        default=True,
-        description="Include dependency health checks"
-    ) 
+class StorageConfigRequest(BaseModel):
+    """Request schema for storage configuration"""
+    storage_type: StorageType = Field(..., description="Storage type to configure")
+    config: Dict[str, Any] = Field(..., description="Storage configuration") 
