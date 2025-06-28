@@ -4,20 +4,41 @@
     "schema_query": "Extract a list of apartment listings with 'name', 'location', 'link' and 'price' fields. The 'link' should be the full url of the apartment details page. The 'name' is actually the location of the apartment.",
     "provider": "groq/deepseek-r1-distill-llama-70b",
     "cached_schema_key": "real_estate_schema",
-    "extraction_type": "css"
+    "extraction_type": "css",
+    "pagination": {
+      "enabled": true,
+      "max_pages": 5,
+      "url_pattern": "/{page}",
+      "start_page": 1,
+      "rate_limit_delay": 2.0
+    }
   },
   "jobs": {
     "url": "https://www.expats.cz/jobs",
     "schema_query": "Extract job listings with 'title', 'company', 'location', 'salary', and 'link' fields",
     "provider": "groq/deepseek-r1-distill-llama-70b",
     "cached_schema_key": "jobs_schema",
-    "extraction_type": "css"
+    "extraction_type": "css",
+    "pagination": {
+      "enabled": false,
+      "max_pages": 1,
+      "url_pattern": "/{page}",
+      "start_page": 1,
+      "rate_limit_delay": 1.0
+    }
   },
   "news": {
     "url": "https://www.expats.cz/",
     "schema_query": "Extract news articles with 'title', 'summary', 'date', 'author', and 'link' fields",
     "provider": "groq/deepseek-r1-distill-llama-70b",
     "cached_schema_key": "news_schema",
-    "extraction_type": "css"
+    "extraction_type": "css",
+    "pagination": {
+      "enabled": false,
+      "max_pages": 1,
+      "url_pattern": "/{page}",
+      "start_page": 1,
+      "rate_limit_delay": 1.0
+    }
   }
 }

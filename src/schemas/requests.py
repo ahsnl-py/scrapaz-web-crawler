@@ -24,6 +24,10 @@ class ScrapingJobRequest(BaseModel):
         default_factory=dict,
         description="Additional metadata for the job"
     )
+    max_pages: Optional[int] = Field(
+        None, 
+        description="Maximum number of pages to scrape (overrides config default)"
+    )
 
 
 class ScrapingConfigRequest(BaseModel):

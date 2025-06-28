@@ -82,8 +82,8 @@ class Crawl4AIService(ScrapingService):
             # Create browser configuration
             browser_config = self._create_browser_config(config)
             
-            # Execute the scraping using JsonCssExtractionStrategy
-            result_data = await self._execute_scraping_with_schema(
+            # Execute the scraping with pagination
+            result_data, pages_scraped = await self._execute_scraping_with_pagination(
                 job, browser_config, schema, job_config, config
             )
             
@@ -99,7 +99,12 @@ class Crawl4AIService(ScrapingService):
                 data=result_data,
                 total_items=len(result_data),
                 extraction_time=extraction_time,
-                metadata={"provider": job.ai_model_provider.value, "job_type": job.job_type.value}
+                pages_scraped=pages_scraped,
+                metadata={
+                    "provider": job.ai_model_provider.value, 
+                    "job_type": job.job_type.value,
+                    "pages_scraped": pages_scraped
+                }
             )
             
         except Exception as e:
@@ -166,46 +171,110 @@ class Crawl4AIService(ScrapingService):
             else:
                 raise ValueError(f"Failed to get sample HTML from {url}")
     
-    async def _execute_scraping_with_schema(
+    async def _execute_scraping_with_pagination(
         self,
         job: ScrapingJob,
         browser_config: BrowserConfig,
         schema: Dict,
         job_config: Dict,
         config: ScrapingServiceConfig,
-    ) -> List[Dict]:
-        """Execute scraping using JsonCssExtractionStrategy"""
+    ) -> tuple[List[Dict], int]:
+        """Execute scraping with pagination support"""
         session_id = job.session_id or f"session_{job.id}"
         
+        # Get pagination settings
+        pagination_config = job_config.get("pagination", {})
+        enabled = pagination_config.get("enabled", False)
+        
+        if not enabled:
+            # Single page scraping
+            result_data = await self._scrape_single_page(
+                job_config["url"], browser_config, schema, session_id
+            )
+            return result_data, 1
+        
+        # Multi-page scraping
+        max_pages = job.max_pages or pagination_config.get("max_pages", 1)
+        start_page = pagination_config.get("start_page", 1)
+        url_pattern = pagination_config.get("url_pattern", "/{page}")
+        rate_limit_delay = pagination_config.get("rate_limit_delay", 2.0)
+        
+        all_data = []
+        pages_scraped = 0
+        
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            for page_num in range(start_page, start_page + max_pages):
+                # Construct page URL
+                if page_num == 1:
+                    page_url = job_config["url"]
+                else:
+                    page_url = job_config["url"] + url_pattern.format(page=page_num)
+                
+                # Scrape the page
+                page_data = await self._scrape_single_page_with_crawler(
+                    page_url, crawler, schema, session_id
+                )
+                
+                if not page_data:
+                    # No more data, stop pagination
+                    break
+                
+                all_data.extend(page_data)
+                pages_scraped += 1
+                
+                # Rate limiting between pages
+                if page_num < start_page + max_pages - 1 and rate_limit_delay > 0:
+                    await asyncio.sleep(rate_limit_delay)
+        
+        return all_data, pages_scraped
+    
+    async def _scrape_single_page(
+        self,
+        url: str,
+        browser_config: BrowserConfig,
+        schema: Dict,
+        session_id: str,
+    ) -> List[Dict]:
+        """Scrape a single page"""
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            return await self._scrape_single_page_with_crawler(url, crawler, schema, session_id)
+    
+    async def _scrape_single_page_with_crawler(
+        self,
+        url: str,
+        crawler: AsyncWebCrawler,
+        schema: Dict,
+        session_id: str,
+    ) -> List[Dict]:
+        """Scrape a single page using existing crawler instance"""
         # Create extraction strategy
         extraction_strategy = JsonCssExtractionStrategy(schema=schema)
         
         # Create run config
         run_config = CrawlerRunConfig(
-            # cache_mode=CacheMode.BYPASS,
+            cache_mode=CacheMode.BYPASS,
             extraction_strategy=extraction_strategy,
             session_id=session_id,
         )
         
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            result: List[CrawlResult] = await crawler.arun(
-                url=job_config["url"],  # Use URL from config
-                config=run_config
-            )
-            
-            all_data = []
-            for r in result:
-                if r.success and r.extracted_content:
-                    try:
-                        extracted_data = json.loads(r.extracted_content)
-                        if isinstance(extracted_data, list):
-                            all_data.extend(extracted_data)
-                        else:
-                            all_data.append(extracted_data)
-                    except json.JSONDecodeError:
-                        continue
-            
-            return all_data
+        result: List[CrawlResult] = await crawler.arun(
+            url=url,
+            config=run_config
+        )
+        
+        all_data = []
+        for r in result:
+            if r.success and r.extracted_content:
+                try:
+                    extracted_data = json.loads(r.extracted_content)
+                    if isinstance(extracted_data, list):
+                        all_data.extend(extracted_data)
+                    else:
+                        all_data.append(extracted_data)
+                except json.JSONDecodeError:
+                    continue
+        
+        return all_data
     
     async def validate_job(self, job: ScrapingJob) -> bool:
         """

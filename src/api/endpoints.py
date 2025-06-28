@@ -74,6 +74,7 @@ async def create_scraping_job(
             storage_type=job_request.storage_type,
             session_id=job_request.session_id,
             metadata=job_request.metadata,
+            max_pages=job_request.max_pages,  # Add pagination limit
         )
         
         # Validate the job
@@ -270,6 +271,7 @@ async def get_job_result(
             extraction_time=result.extraction_time,
             raw_content=result.raw_content,
             metadata=result.metadata,
+            pages_scraped=result.pages_scraped,
         )
         
     except HTTPException:

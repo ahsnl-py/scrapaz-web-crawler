@@ -55,6 +55,7 @@ class ScrapingJob(BaseModel):
     session_id: Optional[str] = None
     storage_type: StorageType = StorageType.MEMORY
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    max_pages: Optional[int] = None
 
 
 class ScrapingResult(BaseModel):
@@ -65,6 +66,7 @@ class ScrapingResult(BaseModel):
     extraction_time: float
     raw_content: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    pages_scraped: int = 0
 
 
 class ScrapingServiceConfig(BaseModel):

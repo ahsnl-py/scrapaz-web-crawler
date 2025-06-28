@@ -31,6 +31,7 @@ class ScrapingResultResponse(BaseModel):
     extraction_time: float = Field(..., description="Time taken for extraction")
     raw_content: Optional[str] = Field(None, description="Raw content if available")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Result metadata")
+    pages_scraped: int = Field(..., description="Number of pages scraped")
 
 
 class JobListResponse(BaseModel):
