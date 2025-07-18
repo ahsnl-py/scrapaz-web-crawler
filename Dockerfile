@@ -32,11 +32,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
 # Install Playwright browsers as root (this ensures proper installation)
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# RUN playwright install chromium
+# RUN playwright install-deps chromium
 
 # Create necessary directories and set permissions
 RUN mkdir -p /home/appuser/.cache /home/appuser/.local \
+    && mkdir -p /app/schemas /app/data \
     && chown -R appuser:appuser /home/appuser \
     && chown -R appuser:appuser /app \
     && chown -R appuser:appuser /usr/local/lib/python3.11/site-packages/playwright
@@ -46,6 +47,8 @@ COPY --chown=appuser:appuser src/ ./src/
 
 # Switch to non-root user
 USER appuser
+
+RUN playwright install
 
 # Set environment variable for Crawl4AI cache directory
 ENV CRAWL4AI_CACHE_DIR=/home/appuser/.cache/crawl4ai

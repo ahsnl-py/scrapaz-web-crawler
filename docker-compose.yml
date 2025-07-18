@@ -4,19 +4,22 @@ services:
   scraper-service:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8001"
     env_file:
       - .env
     environment:
       # Override specific values for development
       - ENVIRONMENT=development
       - DEBUG=true
-      - RELOAD=true
+      - RELOAD=false  # Change this to false
       - REDIS_URL=redis://redis:6379
+      - PORT=8001  # Change this from 8000 to 8001
     depends_on:
       - redis
     volumes:
       - ./src:/app/src
+      - schemas_data:/app/schemas
+      - crawl4ai_cache:/home/appuser/.cache/crawl4ai
     networks:
       - scraper-network
     restart: unless-stopped
@@ -61,6 +64,8 @@ services:
 volumes:
   redis_data:
   grafana_data:
+  schemas_data:
+  crawl4ai_cache:
 
 networks:
   scraper-network:

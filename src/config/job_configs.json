@@ -14,17 +14,17 @@
     }
   },
   "jobs": {
-    "url": "https://www.expats.cz/jobs",
-    "schema_query": "Extract job listings with 'title', 'company', 'location', 'salary', and 'link' fields",
+    "url": "https://www.jobs.cz/en",
+    "schema_query": "Extract job listings with 'title', 'company', 'location', 'salary', 'ratings', and 'link' fields. The 'ratings' field should contain the company ratings information if available.",
     "provider": "groq/deepseek-r1-distill-llama-70b",
     "cached_schema_key": "jobs_schema",
     "extraction_type": "css",
     "pagination": {
       "enabled": false,
       "max_pages": 1,
-      "url_pattern": "/{page}",
+      "url_pattern": "/?page={page}",
       "start_page": 1,
-      "rate_limit_delay": 1.0
+      "rate_limit_delay": 5.0
     }
   },
   "news": {

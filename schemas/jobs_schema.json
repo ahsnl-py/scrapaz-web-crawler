@@ -1,0 +1,37 @@
+{
+  "name": "Job Listings",
+  "baseSelector": ".SearchResultCard",
+  "fields": [
+    {
+      "name": "title",
+      "selector": "h2.SearchResultCard__title",
+      "type": "text"
+    },
+    {
+      "name": "company",
+      "selector": "li.SearchResultCard__footerItem span[translate='no']",
+      "type": "text"
+    },
+    {
+      "name": "location",
+      "selector": "li[data-test='serp-locality']",
+      "type": "text"
+    },
+    {
+      "name": "salary",
+      "selector": "span.Tag--success",
+      "type": "text"
+    },
+    {
+      "name": "ratings",
+      "selector": "a[data-test='serp-atmoskop']",
+      "type": "text"
+    },
+    {
+      "name": "link",
+      "selector": "a.link-primary",
+      "type": "attribute",
+      "attribute": "href"
+    }
+  ]
+}
