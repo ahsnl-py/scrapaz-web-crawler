@@ -32,8 +32,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
 # Install Playwright browsers as root (this ensures proper installation)
-# RUN playwright install chromium
-# RUN playwright install-deps chromium
+RUN playwright install chromium
+RUN playwright install-deps chromium
 
 # Create necessary directories and set permissions
 RUN mkdir -p /home/appuser/.cache /home/appuser/.local \

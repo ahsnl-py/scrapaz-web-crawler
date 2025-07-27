@@ -7,7 +7,7 @@
     "extraction_type": "css",
     "pagination": {
       "enabled": true,
-      "max_pages": 5,
+      "max_pages": 2,
       "url_pattern": "/{page}",
       "start_page": 1,
       "rate_limit_delay": 2.0
@@ -21,7 +21,7 @@
     "extraction_type": "css",
     "pagination": {
       "enabled": false,
-      "max_pages": 1,
+      "max_pages": 2,
       "url_pattern": "/?page={page}",
       "start_page": 1,
       "rate_limit_delay": 5.0

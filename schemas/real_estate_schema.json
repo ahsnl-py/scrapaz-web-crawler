@@ -1,27 +1,29 @@
 {
-  "name": "Apartment Listings",
-  "baseSelector": ".list > div",
-  "fields": [
-      {
-          "name": "name",
-          "selector": "h3",
-          "type": "text"
-      },
-      {
-          "name": "location",
-          "selector": "h2",
-          "type": "text"
-      },
-      {
-          "name": "link",
-          "selector": "h2 a",
-          "type": "attribute",
-          "attribute": "href"
-      },
-      {
-          "name": "price",
-          "selector": "strong",
-          "type": "text"
-      }
-  ]
+    "name": "Apartment Listings",
+    "baseSelector": ".list > div",
+    "fields": [
+        {
+            "name": "name",
+            "selector": "h2 > a",
+            "type": "text"
+        },
+        {
+            "name": "location",
+            "selector": "h3",
+            "type": "text"
+        },
+        {
+            "name": "link",
+            "selector": ".photos > a:first-child",
+            "type": "attribute",
+            "attribute": "href",
+            "transform": "prepend_base_url"
+        },
+        {
+            "name": "price",
+            "selector": "strong",
+            "type": "text",
+            "transform": "strip"
+        }
+    ]
 }
