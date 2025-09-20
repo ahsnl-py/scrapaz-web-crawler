@@ -250,11 +250,17 @@ class Crawl4AIService(ScrapingService):
         # Create extraction strategy
         extraction_strategy = JsonCssExtractionStrategy(schema=schema)
         
-        # Create run config
+        # Get timeout from environment or use default
+        timeout_seconds = int(os.getenv("TIMEOUT", "120"))  # Default to 120 seconds
+        timeout_milliseconds = timeout_seconds * 1000
+        
+        # Create run config with proper timeout
         run_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             extraction_strategy=extraction_strategy,
             session_id=session_id,
+            page_timeout=timeout_milliseconds,  # Use config value with fallback
+            # wait_for="domcontentloaded",
         )
         
         result: List[CrawlResult] = await crawler.arun(
