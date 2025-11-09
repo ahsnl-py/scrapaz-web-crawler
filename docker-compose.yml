@@ -37,36 +37,8 @@ services:
       - scraper-network
     restart: unless-stopped
 
-  # Optional monitoring services
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    networks:
-      - scraper-network
-    restart: unless-stopped
-    profiles:
-      - monitoring  # This makes it optional
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-    networks:
-      - scraper-network
-    restart: unless-stopped
-    profiles:
-      - monitoring  # This makes it optional
-
 volumes:
   redis_data:
-  grafana_data:
   schemas_data:
   crawl4ai_cache:
 

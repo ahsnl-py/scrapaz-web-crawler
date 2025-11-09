@@ -70,6 +70,9 @@ class Crawl4AIService(ScrapingService):
         try:
             # Get job configuration
             job_config = self.job_config_service.get_job_config(job.job_type)
+
+            if job.max_pages > 0:
+                job_config["pagination"]["max_pages"] = job.max_pages
             
             # Get or generate schema
             schema = await self._get_or_generate_schema(job.job_type, job_config)
@@ -376,12 +379,12 @@ class Crawl4AIService(ScrapingService):
     def _get_provider_name(self, provider: AIModelProvider) -> str:
         """Get the provider name for Crawl4AI"""
         provider_mapping = {
-            AIModelProvider.GROQ: "groq/deepseek-r1-distill-llama-70b",
+            AIModelProvider.GROQ: "groq/llama-3.3-70b-versatile",
             AIModelProvider.OPENAI: "openai/gpt-4",
             AIModelProvider.ANTHROPIC: "anthropic/claude-3-sonnet",
         }
         
-        return provider_mapping.get(provider, "groq/deepseek-r1-distill-llama-70b")
+        return provider_mapping.get(provider, "groq/llama-3.3-70b-versatile")
     
     def _get_extraction_instruction(self, job: ScrapingJob) -> str:
         """Get extraction instruction for the LLM"""
