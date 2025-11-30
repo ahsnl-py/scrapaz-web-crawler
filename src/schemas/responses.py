@@ -12,7 +12,7 @@ from ..core.models import AIModelProvider, JobType, ScrapingStatus, StorageType
 class ScrapingJobResponse(BaseModel):
     """Response schema for scraping job"""
     id: str = Field(..., description="Job ID")
-    job_type: JobType = Field(..., description="Type of job")
+    job_type: Optional[JobType] = Field(None, description="Type of job (for CSS strategy)")
     ai_model_provider: AIModelProvider = Field(..., description="AI model provider used")
     status: ScrapingStatus = Field(..., description="Current job status")
     created_at: datetime = Field(..., description="Job creation timestamp")

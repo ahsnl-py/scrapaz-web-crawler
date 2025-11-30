@@ -3,6 +3,12 @@
   "baseSelector": ".SearchResultCard",
   "fields": [
     {
+      "name": "job_id",
+      "selector": ".SearchResultCard__titleLink",
+      "type": "attribute",
+      "attribute": "data-jobad-id"
+    },
+    {
       "name": "title",
       "selector": "h2.SearchResultCard__title",
       "type": "text"
@@ -29,7 +35,7 @@
     },
     {
       "name": "link",
-      "selector": "a.link-primary",
+      "selector": ".SearchResultCard__titleLink",
       "type": "attribute",
       "attribute": "href"
     }

@@ -74,7 +74,11 @@ async def create_scraping_job(
             storage_type=job_request.storage_type,
             session_id=job_request.session_id,
             metadata=job_request.metadata,
-            max_pages=job_request.max_pages,  # Add pagination limit
+            max_pages=job_request.max_pages,
+            # New fields for flexible scraping
+            url=job_request.url,
+            extraction_strategy=job_request.extraction_strategy,
+            schema_name=job_request.schema_name,
         )
         
         # Validate the job

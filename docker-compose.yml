@@ -21,7 +21,7 @@ services:
       - redis
     volumes:
       - ./src:/app/src
-      - schemas_data:/app/schemas
+      - ./schemas:/app/schemas  # Changed to bind mount for development
       - crawl4ai_cache:/home/appuser/.cache/crawl4ai
     networks:
       - scraper-network
@@ -39,7 +39,7 @@ services:
 
 volumes:
   redis_data:
-  schemas_data:
+  # schemas_data:  # Commented out - using bind mount instead
   crawl4ai_cache:
 
 networks:

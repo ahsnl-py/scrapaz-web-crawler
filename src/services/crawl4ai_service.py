@@ -21,6 +21,7 @@ from crawl4ai import (
 
 from ..core.models import (
     AIModelProvider,
+    ExtractionStrategy,
     JobType,
     ScrapingJob,
     ScrapingResult,
@@ -28,6 +29,10 @@ from ..core.models import (
     ScrapingStatus,
 )
 from ..core.scraping_service import ScrapingService
+from ..schemas.extraction_schemas import (
+    get_extraction_instruction,
+    get_schema_json_schema,
+)
 from .job_config_service import JobConfigService
 
 
@@ -68,15 +73,8 @@ class Crawl4AIService(ScrapingService):
         job.started_at = time.time()
         
         try:
-            # Get job configuration
-            job_config = self.job_config_service.get_job_config(job.job_type)
-
-            if job.max_pages > 0:
-                job_config["pagination"]["max_pages"] = job.max_pages
-            
-            # Get or generate schema
-            schema = await self._get_or_generate_schema(job.job_type, job_config)
-            job.data_schema = schema
+            # Determine extraction strategy
+            extraction_strategy = job.extraction_strategy or ExtractionStrategy.CSS
             
             # Validate the job
             if not await self.validate_job(job):
@@ -85,10 +83,27 @@ class Crawl4AIService(ScrapingService):
             # Create browser configuration
             browser_config = self._create_browser_config(config)
             
-            # Execute the scraping with pagination
-            result_data, pages_scraped = await self._execute_scraping_with_pagination(
-                job, browser_config, schema, job_config, config
-            )
+            # Route to appropriate extraction method
+            if extraction_strategy == ExtractionStrategy.LLM:
+                # LLM-based single page extraction
+                result_data, pages_scraped = await self._scrape_with_llm_strategy(
+                    job, browser_config, config
+                )
+            else:
+                # CSS-based list extraction (existing functionality)
+                job_config = self.job_config_service.get_job_config(job.job_type)
+                
+                if job.max_pages > 0:
+                    job_config["pagination"]["max_pages"] = job.max_pages
+                
+                # Get or generate schema
+                schema = await self._get_or_generate_schema(job.job_type, job_config)
+                job.data_schema = schema
+                
+                # Execute the scraping with pagination
+                result_data, pages_scraped = await self._execute_scraping_with_pagination(
+                    job, browser_config, schema, job_config, config
+                )
             
             # Calculate extraction time
             extraction_time = time.time() - start_time
@@ -97,17 +112,24 @@ class Crawl4AIService(ScrapingService):
             job.status = ScrapingStatus.COMPLETED
             job.completed_at = time.time()
             
+            # Build metadata
+            metadata = {
+                "provider": job.ai_model_provider.value,
+                "extraction_strategy": extraction_strategy.value,
+                "pages_scraped": pages_scraped
+            }
+            if job.job_type:
+                metadata["job_type"] = job.job_type.value
+            if job.schema_name:
+                metadata["schema_name"] = job.schema_name
+            
             return ScrapingResult(
                 job_id=job.id,
                 data=result_data,
                 total_items=len(result_data),
                 extraction_time=extraction_time,
                 pages_scraped=pages_scraped,
-                metadata={
-                    "provider": job.ai_model_provider.value, 
-                    "job_type": job.job_type.value,
-                    "pages_scraped": pages_scraped
-                }
+                metadata=metadata
             )
             
         except Exception as e:
@@ -295,19 +317,33 @@ class Crawl4AIService(ScrapingService):
         Returns:
             bool: True if the job is valid, False otherwise
         """
-        # Check if job type is provided
-        if not job.job_type:
-            return False
+        extraction_strategy = job.extraction_strategy or ExtractionStrategy.CSS
         
-        # Check if job type is supported
-        try:
-            self.job_config_service.get_job_config(job.job_type)
-        except ValueError:
-            return False
-        
-        # Check if API key is available for schema generation
-        if not self._get_api_key(AIModelProvider.GROQ):
-            return False
+        if extraction_strategy == ExtractionStrategy.LLM:
+            # For LLM strategy, URL and schema_name are required
+            if not job.url:
+                return False
+            if not job.schema_name:
+                return False
+            # Check if schema exists
+            schema = get_schema_json_schema(job.schema_name)
+            if not schema:
+                return False
+            # Check if API key is available
+            if not self._get_api_key(job.ai_model_provider):
+                return False
+        else:
+            # For CSS strategy, job_type is required
+            if not job.job_type:
+                return False
+            # Check if job type is supported
+            try:
+                self.job_config_service.get_job_config(job.job_type)
+            except ValueError:
+                return False
+            # Check if API key is available for schema generation
+            if not self._get_api_key(AIModelProvider.GROQ):
+                return False
         
         return True
     
@@ -392,4 +428,99 @@ class Crawl4AIService(ScrapingService):
         return (
             "Extract all items from the following content according to the provided schema. "
             "Ensure all required fields are present and data is accurate."
-        ) 
+        )
+    
+    async def _scrape_with_llm_strategy(
+        self,
+        job: ScrapingJob,
+        browser_config: BrowserConfig,
+        config: ScrapingServiceConfig,
+    ) -> tuple[List[Dict], int]:
+        """
+        Scrape a single page using LLM extraction strategy.
+        
+        Args:
+            job: The scraping job
+            browser_config: Browser configuration
+            config: Service configuration
+            
+        Returns:
+            Tuple of (result_data, pages_scraped)
+        """
+        if not job.url:
+            raise ValueError("URL is required for LLM extraction strategy")
+        if not job.schema_name:
+            raise ValueError("schema_name is required for LLM extraction strategy")
+        
+        # Get schema from registry
+        schema = get_schema_json_schema(job.schema_name)
+        if not schema:
+            raise ValueError(f"Schema '{job.schema_name}' not found in registry")
+        
+        # Get extraction instruction
+        instruction = get_extraction_instruction(job.schema_name)
+        if not instruction:
+            instruction = self._get_extraction_instruction(job)
+        
+        # Get API key for the provider
+        api_key = self._get_api_key(job.ai_model_provider)
+        if not api_key:
+            raise ValueError(f"API key not found for provider: {job.ai_model_provider.value}")
+        
+        # Get provider name
+        provider_name = self._get_provider_name(job.ai_model_provider)
+        
+        # Create LLM config
+        llm_config = LLMConfig(
+            provider=provider_name,
+            api_token=api_key,
+        )
+        
+        # Create extraction strategy
+        extraction_strategy = LLMExtractionStrategy(
+            llm_config=llm_config,
+            schema=schema,
+            extraction_type="schema",
+            instruction=instruction,
+        )
+        
+        # Get timeout from environment or use default
+        timeout_seconds = int(os.getenv("TIMEOUT", "120"))
+        timeout_milliseconds = timeout_seconds * 1000
+        
+        # Create run config
+        run_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            extraction_strategy=extraction_strategy,
+            session_id=job.session_id or f"session_{job.id}",
+            page_timeout=timeout_milliseconds,
+            # Enable JavaScript rendering for dynamic content
+            js_code="() => { window.scrollTo(0, document.body.scrollHeight); return new Promise(resolve => setTimeout(resolve, 2000)); }",
+            wait_for="document.readyState === 'complete'",
+        )
+        
+        # Scrape the page
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result: List[CrawlResult] = await crawler.arun(
+                url=job.url,
+                config=run_config
+            )
+        
+        # Parse results
+        all_data = []
+        for r in result:
+            if r.success and r.extracted_content:
+                try:
+                    extracted_data = json.loads(r.extracted_content)
+                    # For LLM extraction, result is typically a single object, not a list
+                    if isinstance(extracted_data, list):
+                        all_data.extend(extracted_data)
+                    else:
+                        all_data.append(extracted_data)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Store schema in job
+        job.data_schema = schema
+        
+        return all_data, 1  # Single page scraping 

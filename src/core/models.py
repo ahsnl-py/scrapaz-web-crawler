@@ -41,10 +41,16 @@ class JobType(str, Enum):
     NEWS = "news"
 
 
+class ExtractionStrategy(str, Enum):
+    """Extraction strategies for web scraping"""
+    CSS = "css"  # JsonCssExtractionStrategy - for list-based extraction
+    LLM = "llm"  # LLMExtractionStrategy - for single page structured extraction
+
+
 class ScrapingJob(BaseModel):
     """Represents a scraping job"""
     id: UUID = Field(default_factory=uuid4)
-    job_type: JobType
+    job_type: Optional[JobType] = None  # Optional for single-page scraping
     ai_model_provider: AIModelProvider = AIModelProvider.GROQ
     data_schema: Optional[Dict[str, Any]] = None
     status: ScrapingStatus = ScrapingStatus.PENDING
@@ -56,6 +62,10 @@ class ScrapingJob(BaseModel):
     storage_type: StorageType = StorageType.MEMORY
     metadata: Dict[str, Any] = Field(default_factory=dict)
     max_pages: Optional[int] = None
+    # New fields for flexible scraping
+    url: Optional[str] = None  # Direct URL for single-page scraping
+    extraction_strategy: Optional[ExtractionStrategy] = None  # CSS or LLM
+    schema_name: Optional[str] = None  # Schema name like "job_details"
 
 
 class ScrapingResult(BaseModel):

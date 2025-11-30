@@ -3,14 +3,32 @@ Request schemas for the scraper service API
 """
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
-from ..core.models import AIModelProvider, JobType, StorageType
+from ..core.models import AIModelProvider, ExtractionStrategy, JobType, StorageType
 
 
 class ScrapingJobRequest(BaseModel):
     """Request schema for creating a new scraping job"""
-    job_type: JobType = Field(..., description="Type of job to execute")
+    # For list-based scraping (existing functionality)
+    job_type: Optional[JobType] = Field(
+        None, 
+        description="Type of job to execute (for list-based scraping from job_configs.json)"
+    )
+    # For single-page scraping (new functionality)
+    url: Optional[str] = Field(
+        None,
+        description="Direct URL to scrape (for single-page extraction)"
+    )
+    extraction_strategy: ExtractionStrategy = Field(
+        default=ExtractionStrategy.CSS,
+        description="Extraction strategy: 'css' for list-based extraction, 'llm' for single-page structured extraction"
+    )
+    schema_name: Optional[str] = Field(
+        None,
+        description="Schema name for LLM extraction (e.g., 'job_details'). Required when extraction_strategy is 'llm'"
+    )
+    # Common fields
     ai_model_provider: AIModelProvider = Field(
         default=AIModelProvider.GROQ,
         description="AI model provider to use for extraction"
@@ -26,8 +44,21 @@ class ScrapingJobRequest(BaseModel):
     )
     max_pages: Optional[int] = Field(
         None, 
-        description="Maximum number of pages to scrape (overrides config default)"
+        description="Maximum number of pages to scrape (overrides config default, only for CSS strategy)"
     )
+    
+    @model_validator(mode='after')
+    def validate_strategy_requirements(self):
+        """Validate that required fields are present based on extraction strategy"""
+        if self.extraction_strategy == ExtractionStrategy.LLM:
+            if not self.url:
+                raise ValueError("'url' is required when extraction_strategy is 'llm'")
+            if not self.schema_name:
+                raise ValueError("'schema_name' is required when extraction_strategy is 'llm'")
+        elif self.extraction_strategy == ExtractionStrategy.CSS:
+            if not self.job_type:
+                raise ValueError("'job_type' is required when extraction_strategy is 'css'")
+        return self
 
 
 class ScrapingConfigRequest(BaseModel):
