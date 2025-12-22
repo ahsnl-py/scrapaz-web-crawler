@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from typing import Dict, List, Optional, Set
 from urllib.parse import urljoin
 
@@ -84,9 +85,10 @@ class Crawl4AIService(ScrapingService):
             browser_config = self._create_browser_config(config)
             
             # Route to appropriate extraction method
+            failed_urls = []  # Initialize for CSS strategy
             if extraction_strategy == ExtractionStrategy.LLM:
                 # LLM-based single page extraction
-                result_data, pages_scraped = await self._scrape_with_llm_strategy(
+                result_data, pages_scraped, failed_urls = await self._scrape_with_llm_strategy(
                     job, browser_config, config
                 )
             else:
@@ -122,6 +124,9 @@ class Crawl4AIService(ScrapingService):
                 metadata["job_type"] = job.job_type.value
             if job.schema_name:
                 metadata["schema_name"] = job.schema_name
+            # Add failed URLs if any
+            if failed_urls:
+                metadata["failed_urls"] = failed_urls
             
             return ScrapingResult(
                 job_id=job.id,
@@ -320,8 +325,11 @@ class Crawl4AIService(ScrapingService):
         extraction_strategy = job.extraction_strategy or ExtractionStrategy.CSS
         
         if extraction_strategy == ExtractionStrategy.LLM:
-            # For LLM strategy, URL and schema_name are required
-            if not job.url:
+            # For LLM strategy, URL(s) and schema_name are required
+            has_url = bool(job.url)
+            has_urls = bool(job.metadata.get("urls") and isinstance(job.metadata["urls"], list) and len(job.metadata["urls"]) > 0)
+            
+            if not has_url and not has_urls:
                 return False
             if not job.schema_name:
                 return False
@@ -430,25 +438,35 @@ class Crawl4AIService(ScrapingService):
             "Ensure all required fields are present and data is accurate."
         )
     
+    
     async def _scrape_with_llm_strategy(
         self,
         job: ScrapingJob,
         browser_config: BrowserConfig,
         config: ScrapingServiceConfig,
-    ) -> tuple[List[Dict], int]:
+    ) -> tuple[List[Dict], int, List[str]]:
         """
-        Scrape a single page using LLM extraction strategy.
+        Scrape one or multiple pages using LLM extraction strategy.
+        Supports both concurrent and sequential execution modes.
         
         Args:
-            job: The scraping job
+            job: The scraping job (can have job.url for single URL or job.metadata["urls"] for multiple)
+                - job.metadata["execution_mode"]: "concurrent" (default) or "sequential"
             browser_config: Browser configuration
             config: Service configuration
             
         Returns:
-            Tuple of (result_data, pages_scraped)
+            Tuple of (result_data, pages_scraped, failed_urls)
         """
-        if not job.url:
-            raise ValueError("URL is required for LLM extraction strategy")
+        # Get list of URLs to scrape
+        urls_to_scrape = []
+        if job.metadata.get("urls") and isinstance(job.metadata["urls"], list):
+            urls_to_scrape = job.metadata["urls"]
+        elif job.url:
+            urls_to_scrape = [job.url]
+        else:
+            raise ValueError("URL or urls in metadata is required for LLM extraction strategy")
+        
         if not job.schema_name:
             raise ValueError("schema_name is required for LLM extraction strategy")
         
@@ -476,7 +494,19 @@ class Crawl4AIService(ScrapingService):
             api_token=api_key,
         )
         
-        # Create extraction strategy
+        # Get timeout from environment or use default
+        timeout_seconds = int(os.getenv("TIMEOUT", "30"))
+        timeout_milliseconds = timeout_seconds * 1000
+        
+        # Store schema in job
+        job.data_schema = schema
+        
+        # Check execution mode: 'concurrent' (default) or 'sequential'
+        execution_mode = job.metadata.get("execution_mode", "concurrent").lower()
+        if execution_mode not in ["concurrent", "sequential"]:
+            execution_mode = "concurrent"  # Default to concurrent if invalid
+        
+        # Create extraction strategy (shared for all URLs)
         extraction_strategy = LLMExtractionStrategy(
             llm_config=llm_config,
             schema=schema,
@@ -484,43 +514,261 @@ class Crawl4AIService(ScrapingService):
             instruction=instruction,
         )
         
-        # Get timeout from environment or use default
-        timeout_seconds = int(os.getenv("TIMEOUT", "120"))
-        timeout_milliseconds = timeout_seconds * 1000
+        # Scrape URLs using selected execution mode
+        # Ensure browser cleanup even on errors
+        results = []
+        try:
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                print(f"Starting scraping {len(urls_to_scrape)} URLs in {execution_mode} mode")
+                
+                if execution_mode == "sequential":
+                    results = await self._scrape_urls_sequentially(
+                        crawler=crawler,
+                        urls=urls_to_scrape,
+                        extraction_strategy=extraction_strategy,
+                        job=job,
+                        timeout_milliseconds=timeout_milliseconds,
+                    )
+                else:
+                    results = await self._scrape_urls_concurrently(
+                        crawler=crawler,
+                        urls=urls_to_scrape,
+                        extraction_strategy=extraction_strategy,
+                        job=job,
+                        timeout_milliseconds=timeout_milliseconds,
+                    )
+        except Exception as e:
+            print(f"Critical error during scraping: {str(e)}")
+            # If we have partial results, use them; otherwise create error results
+            if not results:
+                results = [e] * len(urls_to_scrape)
         
-        # Create run config
-        run_config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            extraction_strategy=extraction_strategy,
-            session_id=job.session_id or f"session_{job.id}",
-            page_timeout=timeout_milliseconds,
-            # Enable JavaScript rendering for dynamic content
-            js_code="() => { window.scrollTo(0, document.body.scrollHeight); return new Promise(resolve => setTimeout(resolve, 2000)); }",
-            wait_for="document.readyState === 'complete'",
-        )
+        # Parse results from all URLs
+        print(f"Parsing results from {len(results)} responses")
+        all_data, pages_scraped, failed_urls = self._parse_llm_results(urls_to_scrape, results)
+        print(f"✅ Scraping completed: {pages_scraped} pages scraped, {len(all_data)} items extracted")
+        if failed_urls:
+            print(f"⚠️  {len(failed_urls)} URLs failed to scrape: {failed_urls}")
         
-        # Scrape the page
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            result: List[CrawlResult] = await crawler.arun(
-                url=job.url,
-                config=run_config
+        return all_data, pages_scraped, failed_urls
+    
+    async def _scrape_urls_sequentially(
+        self,
+        crawler: AsyncWebCrawler,
+        urls: List[str],
+        extraction_strategy: LLMExtractionStrategy,
+        job: ScrapingJob,
+        timeout_milliseconds: int,
+    ) -> List:
+        """
+        Scrape URLs sequentially (one at a time).
+        
+        Args:
+            crawler: The AsyncWebCrawler instance
+            urls: List of URLs to scrape
+            extraction_strategy: The LLM extraction strategy
+            job: The scraping job
+            timeout_milliseconds: Page timeout in milliseconds
+            
+        Returns:
+            List of results (CrawlResult or Exception)
+        """
+        results = []
+        total_urls = len(urls)
+        
+        for idx, url in enumerate(urls):
+            print(f"[{idx + 1}/{total_urls}] Processing URL: {url}")
+            
+            # Create unique session ID for each URL
+            unique_session_id = f"{job.session_id or f'session_{job.id}'}_{uuid.uuid4().hex[:8]}"
+            
+            # Create run config with unique session ID for this URL
+            run_config = CrawlerRunConfig(
+                cache_mode=CacheMode.BYPASS,
+                extraction_strategy=extraction_strategy,
+                session_id=unique_session_id,
+                page_timeout=timeout_milliseconds,
+                # Enable JavaScript rendering for dynamic content
+                js_code="() => { window.scrollTo(0, document.body.scrollHeight); return new Promise(resolve => setTimeout(resolve, 2000)); }",
+                wait_for="document.readyState === 'complete'",
             )
+            
+            # Add overall timeout for each URL (page_timeout + configurable buffer)
+            # Buffer accounts for LLM processing time, network delays, etc.
+            timeout_buffer_seconds = int(os.getenv("TIMEOUT_BUFFER", "60"))  # Increased from 30 to 60 seconds
+            url_timeout_seconds = (timeout_milliseconds / 1000) + timeout_buffer_seconds
+            
+            try:
+                result = await asyncio.wait_for(
+                    crawler.arun(url=url, config=run_config),
+                    timeout=url_timeout_seconds
+                )
+                results.append(result)
+                print(f"[{idx + 1}/{total_urls}] ✅ Completed: {url}")
+            except asyncio.TimeoutError:
+                error_msg = f"Timeout after {url_timeout_seconds}s for URL: {url}"
+                print(f"[{idx + 1}/{total_urls}] ⏱️  {error_msg}")
+                results.append(TimeoutError(error_msg))
+            except Exception as e:
+                error_msg = f"Error scraping URL {url}: {str(e)}"
+                print(f"[{idx + 1}/{total_urls}] ❌ {error_msg}")
+                results.append(e)
+            
+            # Add delay between sequential requests to reduce resource pressure
+            if idx < len(urls) - 1:
+                await asyncio.sleep(1.0)  # 1 second delay between requests
         
-        # Parse results
+        return results
+    
+    async def _scrape_urls_concurrently(
+        self,
+        crawler: AsyncWebCrawler,
+        urls: List[str],
+        extraction_strategy: LLMExtractionStrategy,
+        job: ScrapingJob,
+        timeout_milliseconds: int,
+    ) -> List:
+        """
+        Scrape URLs concurrently (in parallel with concurrency limit).
+        
+        Args:
+            crawler: The AsyncWebCrawler instance
+            urls: List of URLs to scrape
+            extraction_strategy: The LLM extraction strategy
+            job: The scraping job
+            timeout_milliseconds: Page timeout in milliseconds
+            
+        Returns:
+            List of results (CrawlResult or Exception)
+        """
+        # Get concurrency limit from environment or use default
+        max_concurrent = int(os.getenv("MAX_CONCURRENT_URLS", "2"))
+        semaphore = asyncio.Semaphore(max_concurrent)
+        total_urls = len(urls)
+        
+        # Add overall timeout for each URL (page_timeout + configurable buffer)
+        # Buffer accounts for LLM processing time, network delays, etc.
+        timeout_buffer_seconds = int(os.getenv("TIMEOUT_BUFFER", "60"))  # Increased from 30 to 60 seconds
+        url_timeout_seconds = (timeout_milliseconds / 1000) + timeout_buffer_seconds
+        
+        async def scrape_with_limit(url: str, url_idx: int):
+            """Scrape a single URL with concurrency limit and timeout"""
+            async with semaphore:
+                print(f"[{url_idx + 1}/{total_urls}] Processing URL: {url}")
+                
+                # Create unique session ID for each URL to avoid conflicts
+                unique_session_id = f"{job.session_id or f'session_{job.id}'}_{uuid.uuid4().hex[:8]}"
+                
+                # Create run config with unique session ID for this URL
+                run_config = CrawlerRunConfig(
+                    cache_mode=CacheMode.BYPASS,
+                    extraction_strategy=extraction_strategy,
+                    session_id=unique_session_id,
+                    page_timeout=timeout_milliseconds,
+                    # Enable JavaScript rendering for dynamic content
+                    js_code="() => { window.scrollTo(0, document.body.scrollHeight); return new Promise(resolve => setTimeout(resolve, 2000)); }",
+                    wait_for="document.readyState === 'complete'",
+                )
+                
+                # Add small delay to reduce resource pressure
+                await asyncio.sleep(0.5)
+                
+                try:
+                    result = await asyncio.wait_for(
+                        crawler.arun(url=url, config=run_config),
+                        timeout=url_timeout_seconds
+                    )
+                    print(f"[{url_idx + 1}/{total_urls}] ✅ Completed: {url}")
+                    return result
+                except asyncio.TimeoutError:
+                    error_msg = f"Timeout after {url_timeout_seconds}s for URL: {url}"
+                    print(f"[{url_idx + 1}/{total_urls}] ⏱️  {error_msg}")
+                    return TimeoutError(error_msg)
+                except Exception as e:
+                    error_msg = f"Error scraping URL {url}: {str(e)}"
+                    print(f"[{url_idx + 1}/{total_urls}] ❌ {error_msg}")
+                    return e
+        
+        # Create tasks for concurrent scraping with concurrency limit
+        tasks = [
+            scrape_with_limit(url, idx)
+            for idx, url in enumerate(urls)
+        ]
+        
+        # Execute all tasks concurrently with exception handling
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return results
+    
+    def _parse_llm_results(
+        self,
+        urls_to_scrape: List[str],
+        results: List,
+    ) -> tuple[List[Dict], int, List[str]]:
+        """
+        Parse results from LLM extraction strategy.
+        
+        Args:
+            urls_to_scrape: List of URLs that were scraped
+            results: List of results (CrawlResult or Exception)
+            
+        Returns:
+            Tuple of (all_data, pages_scraped, failed_urls)
+        """
         all_data = []
-        for r in result:
-            if r.success and r.extracted_content:
+        pages_scraped = 0
+        failed_urls = []
+        
+        # Parse results from all URLs
+        for url, result in zip(urls_to_scrape, results):
+            # Handle exceptions from crashed pages or other errors
+            if isinstance(result, Exception):
+                error_msg = str(result)
+                print(f"Error scraping URL {url}: {error_msg}")
+                failed_urls.append(url)
+                continue
+            
+            # Handle CrawlResult or List[CrawlResult]
+            if isinstance(result, list):
+                result_list = result
+            else:
+                result_list = [result]
+            
+            # Track if we got any data from this URL
+            url_has_data = False
+            
+            # Parse each result
+            for r in result_list:
+                if not r.success or not r.extracted_content:
+                    # Scraping failed or no content extracted
+                    continue
+                    
                 try:
                     extracted_data = json.loads(r.extracted_content)
+                    
                     # For LLM extraction, result is typically a single object, not a list
                     if isinstance(extracted_data, list):
-                        all_data.extend(extracted_data)
+                        # Attach URL to each item in the list
+                        for item in extracted_data:
+                            if isinstance(item, dict):
+                                item["url"] = url
+                            all_data.append(item)
+                        if extracted_data:
+                            url_has_data = True
                     else:
+                        # Attach URL to the single object
+                        if isinstance(extracted_data, dict):
+                            extracted_data["url"] = url
                         all_data.append(extracted_data)
-                except json.JSONDecodeError:
+                        url_has_data = True
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON from URL {url}: {str(e)}")
                     continue
+            
+            # Count page if we got data, otherwise mark as failed
+            if url_has_data:
+                pages_scraped += 1
+            else:
+                failed_urls.append(url)
         
-        # Store schema in job
-        job.data_schema = schema
-        
-        return all_data, 1  # Single page scraping 
+        return all_data, pages_scraped, failed_urls 

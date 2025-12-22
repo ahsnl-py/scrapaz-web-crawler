@@ -14,7 +14,8 @@ services:
       - RELOAD=false  # Change this to false
       - REDIS_URL=redis://redis:6379
       - PORT=8001  # Change this from 8000 to 8001
-      - TIMEOUT=120
+      - TIMEOUT=30
+      - TIMEOUT_BUFFER=90
       - MAX_RETRIES=5
       - RATE_LIMIT_DELAY=3.0
     depends_on:

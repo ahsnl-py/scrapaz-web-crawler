@@ -18,7 +18,7 @@ class ScrapingJobRequest(BaseModel):
     # For single-page scraping (new functionality)
     url: Optional[str] = Field(
         None,
-        description="Direct URL to scrape (for single-page extraction)"
+        description="Direct URL to scrape (for single-page extraction). For multiple URLs, use metadata.urls instead."
     )
     extraction_strategy: ExtractionStrategy = Field(
         default=ExtractionStrategy.CSS,
@@ -51,8 +51,16 @@ class ScrapingJobRequest(BaseModel):
     def validate_strategy_requirements(self):
         """Validate that required fields are present based on extraction strategy"""
         if self.extraction_strategy == ExtractionStrategy.LLM:
-            if not self.url:
-                raise ValueError("'url' is required when extraction_strategy is 'llm'")
+            # Check for either single URL or multiple URLs in metadata
+            has_url = bool(self.url)
+            has_urls = bool(
+                self.metadata and 
+                isinstance(self.metadata.get("urls"), list) and 
+                len(self.metadata.get("urls", [])) > 0
+            )
+            
+            if not has_url and not has_urls:
+                raise ValueError("'url' or 'metadata.urls' is required when extraction_strategy is 'llm'")
             if not self.schema_name:
                 raise ValueError("'schema_name' is required when extraction_strategy is 'llm'")
         elif self.extraction_strategy == ExtractionStrategy.CSS:
