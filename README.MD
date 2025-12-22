@@ -69,7 +69,7 @@ scrapaz-web-crawler/
 
 - Python 3.11+
 - Docker and Docker Compose (for containerized deployment)
-- At least one AI provider API key (Groq, OpenAI, or Anthropic)
+- AI provider API key Groq
 
 ### Local Development Setup
 
